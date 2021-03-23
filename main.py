@@ -1,6 +1,19 @@
-import time, os, ntptime, onewire, ds18x20, ubinascii, network, gc
+import ds18x20
+import gc
+import network
+import ntptime
+import onewire
+import os
+import time
+import ubinascii
+
 from machine import Pin, I2C, RTC, SPI
-import LS_Y201, sdcard, simpleMQTT, bh1750
+
+import LS_Y201
+import bh1750
+import sdcard
+import simpleMQTT
+
 gc.enable()
 gc.collect()
 
@@ -14,7 +27,7 @@ topic_sub = b'q5f8r28s/i1'
 wlan = network.WLAN(network.STA_IF)
 
 camera = LS_Y201.LS_Y201()
-uos.dupterm(None,1)
+uos.dupterm(None, 1)
 
 try:
     sd = sdcard.SDCard(SPI(1), Pin(15))
@@ -45,6 +58,7 @@ try:
 except:
     print("time not sync")
 
+
 def sub_cb(topic, msg):
     print((topic, msg))
     if topic == b'q5f8r28s/i1' and msg == b'1':
@@ -52,6 +66,7 @@ def sub_cb(topic, msg):
         client.publish(b'q5f8r28s/i1', msg=b'0')
         camera.save_picture("test_photo.jpeg")
         client.publish(b'q5f8r28s/image', image='test_photo.jpeg')
+
 
 def connect_and_subscribe():
     global client_id, mqtt_server, topic_sub
@@ -62,27 +77,40 @@ def connect_and_subscribe():
     print('Connected to %s MQTT broker, subscribed to %s topic' % (mqtt_server, topic_sub))
     return client
 
+
 def restart_and_reconnect():
     print('Failed to connect to MQTT broker. Reconnecting...')
     time.sleep(10)
     machine.reset()
+
 
 def print_act_date():
     acttime = rtc.datetime()
 
     f_date = "{}_{:02d}_{:02d}".format(acttime[0], acttime[1], acttime[2])
     f_time = "{:02d}:{:02d}:{:02d}".format(acttime[4], acttime[5], acttime[6])
-    sec_time = (acttime[4])*60*60 + acttime[5]*60 + acttime[6]
+    sec_time = (acttime[4]) * 60 * 60 + acttime[5] * 60 + acttime[6]
 
     return f_date, f_time, sec_time
+
 
 def print_date(acttime):
-
     f_date = "{}_{:02d}_{:02d}".format(acttime[0], acttime[1], acttime[2])
     f_time = "{:02d}:{:02d}:{:02d}".format(acttime[4], acttime[5], acttime[6])
-    sec_time = (acttime[4])*60*60 + acttime[5]*60 + acttime[6]
+    sec_time = (acttime[4]) * 60 * 60 + acttime[5] * 60 + acttime[6]
 
     return f_date, f_time, sec_time
+
+
+def error_log(msg):
+    try:
+        err_log = open('err_log.txt', 'a')
+        act_date, act_time = print_act_date()
+        timestamp = '{} {}'.format(act_date, act_time)
+        err_log.write('{} {}\n'.format(timestamp, msg))
+    except:
+        print("cannot open error file")
+
 
 try:
     client = connect_and_subscribe()
@@ -90,7 +118,7 @@ except:
     restart_and_reconnect()
 
 while True:
-    if(time.time() - last_message_check) > message_check_interval:
+    if (time.time() - last_message_check) > message_check_interval:
         try:
             client.check_msg()
         except:
@@ -107,7 +135,7 @@ while True:
                 print("reconnect failed")
         last_message_check = time.time()
 
-    if(time.time() - last_time_sync) > time_sync_interval:
+    if (time.time() - last_time_sync) > time_sync_interval:
         try:
             ntptime.settime()
             print("time synced")
@@ -135,7 +163,7 @@ while True:
             ds_sensor.convert_temp()
             time.sleep(1)
             temp_out = "{:3.1f}".format(ds_sensor.read_temp(b'(\x9f\xf2\x84\x05\x00\x00L'))
-            temp_in = temp_out #"{:3.1f}".format(ds_sensor.read_temp(b'(\xff\xce\x01i\x18\x03\x14'))
+            temp_in = temp_out  # "{:3.1f}".format(ds_sensor.read_temp(b'(\xff\xce\x01i\x18\x03\x14'))
         except:
             print("DS sensor fail")
             temp_in = 0
@@ -147,7 +175,7 @@ while True:
             print("BH1750 error")
             lum = 0
 
-        act_date, act_time, act_sec= print_act_date()
+        act_date, act_time, act_sec = print_act_date()
         timestamp = '{} {}'.format(act_date, act_time)
 
         print(timestamp)
@@ -164,7 +192,7 @@ while True:
             client.publish(b"q5f8r28s/time", timestamp, retain=False)
         except:
             pass
-        
+
         try:
             datalog = open('/sd/data_{}.txt'.format(act_date), 'a')
         except:
@@ -187,8 +215,41 @@ while True:
         except OSError as e:
             pass
 
+        try:
+            date_file = open('daty.csv', 'r')
+            line = []
 
-    if(time.time() - last_photo) > photo_interval:
-           print("take photo")
+            while True:
+                line = date_file.readline()
 
-           last_photo = time.time()
+                if not line:
+                    break
+
+                if line[:5] == act_date[5:10]:
+                    break
+
+            date_file.close()
+
+            close_time = (2020, 1, 1, 1, int(line[12:14]), int(line[15:17]), 0)
+            open_time = (2020, 1, 1, 1, int(line[6:8]), int(line[9:11]), 0)
+
+            close_d, close_t, close_sec = print_date(close_time)
+            open_d, open_t, open_sec = print_date(open_time)
+
+            act_date, act_time, act_sec = print_act_date()
+
+            status_print = ""
+            if act_sec <= open_sec or act_sec >= close_sec:
+                status_print = "closed"
+            else:
+                status_print = "open"
+
+            print("door status: ", status_print)
+
+        except:
+            print("door error")
+
+    if (time.time() - last_photo) > photo_interval:
+        print("take photo")
+
+        last_photo = time.time()
