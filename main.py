@@ -1,13 +1,14 @@
-import ds18x20
 import gc
+import time
+import uos
+
+import ds18x20
 import network
 import ntptime
 import onewire
-import os
-import time
 import ubinascii
 
-from machine import Pin, I2C, RTC, SPI
+import machine
 
 import LS_Y201
 import bh1750
@@ -30,16 +31,16 @@ camera = LS_Y201.LS_Y201()
 uos.dupterm(None, 1)
 
 try:
-    sd = sdcard.SDCard(SPI(1), Pin(15))
-    os.mount(sd, '/sd')
-except:
+    sd = sdcard.SDCard(machine.SPI(1), machine.Pin(15))
+    uos.mount(sd, '/sd')
+except Exception:
     print("no sd card")
 
-rtc = RTC()
-i2c = I2C(scl=Pin(0), sda=Pin(16), freq=100000)
+rtc = machine.RTC()
+i2c = machine.I2C(scl=machine.Pin(0), sda=machine.Pin(16), freq=100000)
 BH = bh1750.BH1750(i2c)
 
-ds_sensor = ds18x20.DS18X20(onewire.OneWire(Pin(4)))
+ds_sensor = ds18x20.DS18X20(onewire.OneWire(machine.Pin(4)))
 
 last_message = 0
 last_net_check = 0
@@ -55,27 +56,26 @@ counter = 0
 
 try:
     ntptime.settime()
-except:
+except Exception:
     print("time not sync")
 
 
-def sub_cb(topic, msg):
-    print((topic, msg))
-    if topic == b'q5f8r28s/i1' and msg == b'1':
+def sub_cb(topic, fun_msg):
+    print((topic, fun_msg))
+    if topic == b'q5f8r28s/i1' and fun_msg == b'1':
         print('ESP received hello message')
-        client.publish(b'q5f8r28s/i1', msg=b'0')
+        client.publish(b'q5f8r28s/i1', fun_msg=b'0')
         camera.save_picture("test_photo.jpeg")
         client.publish(b'q5f8r28s/image', image='test_photo.jpeg')
 
 
 def connect_and_subscribe():
-    global client_id, mqtt_server, topic_sub
-    client = simpleMQTT.MQTTClient(client_id, mqtt_server, port=1883, keepalive=60)
-    client.set_callback(sub_cb)
-    client.connect()
-    client.subscribe(topic_sub)
+    fun_client = simpleMQTT.MQTTClient(client_id, mqtt_server, port=1883, keepalive=60)
+    fun_client.set_callback(sub_cb)
+    fun_client.connect()
+    fun_client.subscribe(topic_sub)
     print('Connected to %s MQTT broker, subscribed to %s topic' % (mqtt_server, topic_sub))
-    return client
+    return fun_client
 
 
 def restart_and_reconnect():
@@ -102,36 +102,36 @@ def print_date(acttime):
     return f_date, f_time, sec_time
 
 
-def error_log(msg):
+def error_log(fun_msg):
     try:
         err_log = open('err_log.txt', 'a')
-        act_date, act_time = print_act_date()
-        timestamp = '{} {}'.format(act_date, act_time)
-        err_log.write('{} {}\n'.format(timestamp, msg))
-    except:
+        fun_act_date, fun_act_time, [] = print_act_date()
+        fun_timestamp = '{} {}'.format(fun_act_date, fun_act_time)
+        err_log.write('{} {}\n'.format(fun_timestamp, fun_msg))
+    except Exception:
         print("cannot open error file")
 
 
 try:
     client = connect_and_subscribe()
-except:
+except Exception:
     restart_and_reconnect()
 
 while True:
     if (time.time() - last_message_check) > message_check_interval:
         try:
             client.check_msg()
-        except:
+        except Exception:
             print("no new message")
 
         try:
             client.ping()
-        except:
+        except Exception:
             client.close_socket()
             try:
                 print("trying connect....")
                 client = connect_and_subscribe()
-            except:
+            except Exception:
                 print("reconnect failed")
         last_message_check = time.time()
 
@@ -140,7 +140,7 @@ while True:
             ntptime.settime()
             print("time synced")
             last_time_sync = time.time()
-        except:
+        except Exception:
             print("time sync failed")
 
     if (time.time() - last_net_check) > net_check_interval:
@@ -155,7 +155,7 @@ while True:
                         continue
                 print('network config:', wlan.ifconfig())
                 last_net_check = time.time()
-        except:
+        except Exception:
             print(" no network")
 
     if (time.time() - last_message) > message_interval:
@@ -164,14 +164,14 @@ while True:
             time.sleep(1)
             temp_out = "{:3.1f}".format(ds_sensor.read_temp(b'(\x9f\xf2\x84\x05\x00\x00L'))
             temp_in = temp_out  # "{:3.1f}".format(ds_sensor.read_temp(b'(\xff\xce\x01i\x18\x03\x14'))
-        except:
+        except Exception:
             print("DS sensor fail")
             temp_in = 0
             temp_out = 0
 
         try:
             lum = "{:3.2f}".format(BH.luminance(bh1750.BH1750.ONCE_HIRES_2))
-        except:
+        except Exception:
             print("BH1750 error")
             lum = 0
 
@@ -190,17 +190,17 @@ while True:
             client.publish(b"q5f8r28s/o4", str(temp_out), retain=False)
             time.sleep(0.05)
             client.publish(b"q5f8r28s/time", timestamp, retain=False)
-        except:
+        except Exception:
             pass
 
         try:
             datalog = open('/sd/data_{}.txt'.format(act_date), 'a')
-        except:
+        except Exception:
             print("Datalog.txt not found")
             try:
-                sd = sdcard.SDCard(SPI(1), Pin(15))
-                os.mount(sd, '/sd')
-            except:
+                sd = sdcard.SDCard(machine.SPI(1), machine.Pin(15))
+                uos.mount(sd, '/sd')
+            except Exception:
                 print(" no sd card")
         else:
             datalog.write('{} {},{},{},{}'.format(act_date, act_time, temp_in, temp_out, lum))
@@ -212,7 +212,7 @@ while True:
             client.publish(b'q5f8r28s/test', msg)
             last_message = time.time()
             counter += 1
-        except OSError as e:
+        except Exception:
             pass
 
         try:
@@ -246,7 +246,7 @@ while True:
 
             print("door status: ", status_print)
 
-        except:
+        except Exception:
             print("door error")
 
     if (time.time() - last_photo) > photo_interval:
