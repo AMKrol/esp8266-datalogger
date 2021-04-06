@@ -1,5 +1,5 @@
 import gc
-import time
+import utime
 import uos
 
 import ds18x20
@@ -18,7 +18,7 @@ import simpleMQTT
 gc.enable()
 gc.collect()
 
-time.sleep(10)
+utime.sleep(10)
 
 mqtt_server = 'broker.hivemq.com'
 client_id = ubinascii.hexlify(machine.unique_id())
@@ -47,24 +47,28 @@ last_net_check = 0
 last_time_sync = 0
 last_photo = 0
 last_message_check = 0
+last_door_check = 0
+door_check_interval = 60
 message_check_interval = 1
 photo_interval = 60
 time_sync_interval = 3600
 net_check_interval = 2
 message_interval = 15
 counter = 0
+old_data = "0"
+close_t = 0
+open_t = 0
 
 try:
     ntptime.settime()
 except Exception:
     print("time not sync")
 
-
 def sub_cb(topic, fun_msg):
     print((topic, fun_msg))
     if topic == b'q5f8r28s/i1' and fun_msg == b'1':
         print('ESP received hello message')
-        client.publish(b'q5f8r28s/i1', fun_msg=b'0')
+        client.publish(b'q5f8r28s/i1', msg=b'0')
         camera.save_picture("test_photo.jpeg")
         client.publish(b'q5f8r28s/image', image='test_photo.jpeg')
 
@@ -80,21 +84,14 @@ def connect_and_subscribe():
 
 def restart_and_reconnect():
     print('Failed to connect to MQTT broker. Reconnecting...')
-    time.sleep(10)
+    utime.sleep(10)
     machine.reset()
 
 
-def print_act_date():
-    acttime = rtc.datetime()
+def print_date(acttime = 0):
+    if acttime == 0:
+        acttime = rtc.datetime()
 
-    f_date = "{}_{:02d}_{:02d}".format(acttime[0], acttime[1], acttime[2])
-    f_time = "{:02d}:{:02d}:{:02d}".format(acttime[4], acttime[5], acttime[6])
-    sec_time = (acttime[4]) * 60 * 60 + acttime[5] * 60 + acttime[6]
-
-    return f_date, f_time, sec_time
-
-
-def print_date(acttime):
     f_date = "{}_{:02d}_{:02d}".format(acttime[0], acttime[1], acttime[2])
     f_time = "{:02d}:{:02d}:{:02d}".format(acttime[4], acttime[5], acttime[6])
     sec_time = (acttime[4]) * 60 * 60 + acttime[5] * 60 + acttime[6]
@@ -105,10 +102,12 @@ def print_date(acttime):
 def error_log(fun_msg):
     try:
         err_log = open('err_log.txt', 'a')
-        fun_act_date, fun_act_time, [] = print_act_date()
+        fun_act_date, fun_act_time, [] = print_date()
         fun_timestamp = '{} {}'.format(fun_act_date, fun_act_time)
         err_log.write('{} {}\n'.format(fun_timestamp, fun_msg))
+        err_log.close()
     except Exception:
+        err_log.close()
         print("cannot open error file")
 
 
@@ -118,7 +117,7 @@ except Exception:
     restart_and_reconnect()
 
 while True:
-    if (time.time() - last_message_check) > message_check_interval:
+    if (utime.time() - last_message_check) > message_check_interval:
         try:
             client.check_msg()
         except Exception:
@@ -133,39 +132,43 @@ while True:
                 client = connect_and_subscribe()
             except Exception:
                 print("reconnect failed")
-        last_message_check = time.time()
+                error_log("reconnect failed")
+        last_message_check = utime.time()
 
-    if (time.time() - last_time_sync) > time_sync_interval:
+    if (utime.time() - last_time_sync) > time_sync_interval:
         try:
             ntptime.settime()
             print("time synced")
-            last_time_sync = time.time()
+            last_time_sync = utime.time()
         except Exception:
             print("time sync failed")
+            error_log("time sync failed")
 
-    if (time.time() - last_net_check) > net_check_interval:
+    if (utime.time() - last_net_check) > net_check_interval:
         try:
             if not wlan.isconnected():
                 print('connecting to network...')
                 wlan.connect('DLINK', 'Hydrologia1!')
 
-                start = time.ticks_ms()
+                start = utime.ticks_ms()
                 while not wlan.isconnected():
-                    if time.ticks_diff(time.ticks_ms(), start) > 5000:
+                    if utime.ticks_diff(utime.ticks_ms(), start) > 5000:
                         continue
                 print('network config:', wlan.ifconfig())
-                last_net_check = time.time()
+                last_net_check = utime.time()
         except Exception:
             print(" no network")
+            error_log(" no network")
 
-    if (time.time() - last_message) > message_interval:
+    if (utime.time() - last_message) > message_interval:
         try:
             ds_sensor.convert_temp()
-            time.sleep(1)
+            utime.sleep(1)
             temp_out = "{:3.1f}".format(ds_sensor.read_temp(b'(\x9f\xf2\x84\x05\x00\x00L'))
             temp_in = temp_out  # "{:3.1f}".format(ds_sensor.read_temp(b'(\xff\xce\x01i\x18\x03\x14'))
         except Exception:
             print("DS sensor fail")
+            error_log("DS sensor fail")
             temp_in = 0
             temp_out = 0
 
@@ -173,9 +176,10 @@ while True:
             lum = "{:3.2f}".format(BH.luminance(bh1750.BH1750.ONCE_HIRES_2))
         except Exception:
             print("BH1750 error")
+            error_log("BH1750 sensor fail")
             lum = 0
 
-        act_date, act_time, act_sec = print_act_date()
+        act_date, act_time, act_sec = print_date()
         timestamp = '{} {}'.format(act_date, act_time)
 
         print(timestamp)
@@ -184,11 +188,11 @@ while True:
         print('Temperature outside: {} C'.format(temp_out))
         try:
             client.publish(b"q5f8r28s/o1", str(temp_in), retain=False)
-            time.sleep(0.05)
+            utime.sleep(0.05)
             client.publish(b"q5f8r28s/o3", str(lum), retain=False)
-            time.sleep(0.05)
+            utime.sleep(0.05)
             client.publish(b"q5f8r28s/o4", str(temp_out), retain=False)
-            time.sleep(0.05)
+            utime.sleep(0.05)
             client.publish(b"q5f8r28s/time", timestamp, retain=False)
         except Exception:
             pass
@@ -197,11 +201,13 @@ while True:
             datalog = open('/sd/data_{}.txt'.format(act_date), 'a')
         except Exception:
             print("Datalog.txt not found")
+            error_log("Data file not found")
             try:
                 sd = sdcard.SDCard(machine.SPI(1), machine.Pin(15))
                 uos.mount(sd, '/sd')
             except Exception:
                 print(" no sd card")
+                error_log("no SD card")
         else:
             datalog.write('{} {},{},{},{}'.format(act_date, act_time, temp_in, temp_out, lum))
             datalog.write('\n')
@@ -210,13 +216,17 @@ while True:
         try:
             msg = b'Hello #%d' % counter
             client.publish(b'q5f8r28s/test', msg)
-            last_message = time.time()
+            last_message = utime.time()
             counter += 1
         except Exception:
             pass
 
+    act_date, act_time, act_sec = print_date()
+
+    if old_data != act_date:
+        data_file = []
         try:
-            date_file = open('daty.csv', 'r')
+            date_file = open("daty.csv", 'r')
             line = []
 
             while True:
@@ -236,20 +246,29 @@ while True:
             close_d, close_t, close_sec = print_date(close_time)
             open_d, open_t, open_sec = print_date(open_time)
 
-            act_date, act_time, act_sec = print_act_date()
+            old_data = act_date
 
+        except Exception:
+            date_file.close()
+            print("date.csv not opened")
+            error_log("date.csv not opened")
+
+    if (utime.time() - last_door_check) > door_check_interval:
+        try:
+            act_date, act_time, act_sec = print_date()
             status_print = ""
             if act_sec <= open_sec or act_sec >= close_sec:
                 status_print = "closed"
             else:
                 status_print = "open"
-
             print("door status: ", status_print)
+            last_door_check = utime.time()
 
         except Exception:
-            print("door error")
+            print("door operation failed")
+            error_log("door operation failed")
 
-    if (time.time() - last_photo) > photo_interval:
+    if (utime.time() - last_photo) > photo_interval:
         print("take photo")
 
-        last_photo = time.time()
+        last_photo = utime.time()
