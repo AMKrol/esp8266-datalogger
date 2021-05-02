@@ -14,6 +14,7 @@ import LS_Y201
 import bh1750
 import sdcard
 import simpleMQTT
+import wakeonlan
 
 gc.enable()
 gc.collect()
@@ -26,6 +27,8 @@ topic_pub = b'q5f8r28s/image'
 topic_sub = b'q5f8r28s/i1'
 
 wlan = network.WLAN(network.STA_IF)
+wol = wakeonlan.PyWake(
+    mac='000AE4C99858', subnetmask='255.255.255.0', my_IPv4='192.168.1.101')
 
 camera = LS_Y201.LS_Y201()
 uos.dupterm(None, 1)
@@ -64,6 +67,7 @@ try:
 except Exception:
     print("time not sync")
 
+
 def sub_cb(topic, fun_msg):
     print((topic, fun_msg))
     if topic == b'q5f8r28s/i1' and fun_msg == b'1':
@@ -72,13 +76,20 @@ def sub_cb(topic, fun_msg):
         camera.save_picture("test_photo.jpeg")
         client.publish(b'q5f8r28s/image', image='test_photo.jpeg')
 
+    if topic == b'q5f8r28s/i1' and fun_msg == b'2':
+        print('ESP received hello message')
+        client.publish(b'q5f8r28s/i1', msg=b'0')
+        wol.send_packet()
+
 
 def connect_and_subscribe():
-    fun_client = simpleMQTT.MQTTClient(client_id, mqtt_server, port=1883, keepalive=60)
+    fun_client = simpleMQTT.MQTTClient(
+        client_id, mqtt_server, port=1883, keepalive=60)
     fun_client.set_callback(sub_cb)
     fun_client.connect()
     fun_client.subscribe(topic_sub)
-    print('Connected to %s MQTT broker, subscribed to %s topic' % (mqtt_server, topic_sub))
+    print('Connected to %s MQTT broker, subscribed to %s topic' %
+          (mqtt_server, topic_sub))
     return fun_client
 
 
@@ -88,7 +99,7 @@ def restart_and_reconnect():
     machine.reset()
 
 
-def print_date(acttime = 0):
+def print_date(acttime=0):
     if acttime == 0:
         acttime = rtc.datetime()
 
@@ -164,8 +175,10 @@ while True:
         try:
             ds_sensor.convert_temp()
             utime.sleep(1)
-            temp_out = "{:3.1f}".format(ds_sensor.read_temp(b'(\x9f\xf2\x84\x05\x00\x00L'))
-            temp_in = temp_out  # "{:3.1f}".format(ds_sensor.read_temp(b'(\xff\xce\x01i\x18\x03\x14'))
+            temp_out = "{:3.1f}".format(
+                ds_sensor.read_temp(b'(\x9f\xf2\x84\x05\x00\x00L'))
+            # "{:3.1f}".format(ds_sensor.read_temp(b'(\xff\xce\x01i\x18\x03\x14'))
+            temp_in = temp_out
         except Exception:
             print("DS sensor fail")
             error_log("DS sensor fail")
@@ -209,7 +222,8 @@ while True:
                 print(" no sd card")
                 error_log("no SD card")
         else:
-            datalog.write('{} {},{},{},{}'.format(act_date, act_time, temp_in, temp_out, lum))
+            datalog.write('{} {},{},{},{}'.format(
+                act_date, act_time, temp_in, temp_out, lum))
             datalog.write('\n')
             datalog.close()
 
